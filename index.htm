@@ -1,0 +1,525 @@
+<div class="ddos-sim" id="ddosSim">
+  <div class="ddos-header">
+    <div>
+      <h2>Интерактив: «Ваш сайт под DDoS-атакой»</h2>
+      <p class="ddos-sub">
+        Вы — админ интернет-магазина. Реагируйте на инцидент, выбирая действия. Каждый шаг = 10 минут.
+      </p>
+    </div>
+    <button class="ddos-btn ddos-btn-ghost" type="button" data-action="reset">Сброс</button>
+  </div>
+
+  <div class="ddos-stats" aria-live="polite">
+    <div class="ddos-stat">
+      <div class="ddos-stat-k">Время инцидента</div>
+      <div class="ddos-stat-v"><span data-stat="minutes">0</span> мин</div>
+    </div>
+    <div class="ddos-stat">
+      <div class="ddos-stat-k">Простой сайта</div>
+      <div class="ddos-stat-v"><span data-stat="downtime">0</span> мин</div>
+    </div>
+    <div class="ddos-stat">
+      <div class="ddos-stat-k">Потери</div>
+      <div class="ddos-stat-v">₽ <span data-stat="loss">0</span></div>
+    </div>
+    <div class="ddos-stat">
+      <div class="ddos-stat-k">Репутационный урон</div>
+      <div class="ddos-stat-v"><span data-stat="rep">0</span> / 100</div>
+    </div>
+  </div>
+
+  <div class="ddos-card">
+    <div class="ddos-time">Ситуация</div>
+    <div class="ddos-scene" data-ui="scene"></div>
+
+    <div class="ddos-choices" data-ui="choices"></div>
+
+    <div class="ddos-feedback" data-ui="feedback" hidden></div>
+
+    <div class="ddos-footer">
+      <div class="ddos-tip" data-ui="tip"></div>
+      <div class="ddos-actions">
+        <button class="ddos-btn" type="button" data-action="back" disabled>Назад</button>
+        <button class="ddos-btn" type="button" data-action="next" disabled>Дальше</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<style>
+  .ddos-sim{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;max-width:860px;margin:20px auto;padding:18px;border:1px solid #e6e6e6;border-radius:16px;background:#fff}
+  .ddos-header{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:14px}
+  .ddos-header h2{margin:0;font-size:20px;line-height:1.2}
+  .ddos-sub{margin:6px 0 0;color:#555;font-size:14px}
+  .ddos-stats{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin:12px 0 16px}
+  .ddos-stat{border:1px solid #efefef;border-radius:14px;padding:10px 12px;background:#fafafa}
+  .ddos-stat-k{color:#666;font-size:12px;margin-bottom:4px}
+  .ddos-stat-v{font-weight:700;font-size:16px}
+  .ddos-card{border:1px solid #efefef;border-radius:16px;padding:14px}
+  .ddos-time{font-size:12px;color:#777;margin-bottom:6px}
+  .ddos-scene{font-size:16px;line-height:1.4;margin-bottom:12px}
+  .ddos-choices{display:grid;gap:10px;margin:12px 0}
+  .ddos-choice{border:1px solid #e8e8e8;border-radius:14px;padding:12px;background:#fff;cursor:pointer;text-align:left;transition:transform .04s ease, border-color .12s ease, background .12s ease}
+  .ddos-choice:hover{border-color:#d8d8d8;background:#fcfcfc}
+  .ddos-choice:active{transform:translateY(1px)}
+  .ddos-choice strong{display:block;margin-bottom:4px}
+  .ddos-choice small{color:#666}
+  .ddos-choice[aria-pressed="true"]{border-color:#111;background:#f4f4f4}
+  .ddos-feedback{margin-top:10px;border-radius:14px;padding:12px;background:#f7f7ff;border:1px solid #e2e2ff}
+  .ddos-feedback .ddos-badge{display:inline-block;font-size:12px;padding:2px 8px;border-radius:999px;background:#111;color:#fff;margin-right:8px}
+  .ddos-footer{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:12px}
+  .ddos-tip{color:#666;font-size:13px;max-width:64%}
+  .ddos-actions{display:flex;gap:8px}
+  .ddos-btn{border:1px solid #111;background:#111;color:#fff;border-radius:12px;padding:10px 12px;cursor:pointer;font-weight:600}
+  .ddos-btn:disabled{opacity:.4;cursor:not-allowed}
+  .ddos-btn-ghost{background:#fff;color:#111}
+  @media (max-width:820px){.ddos-stats{grid-template-columns:repeat(2,1fr)}.ddos-tip{max-width:100%}.ddos-footer{flex-direction:column;align-items:stretch}.ddos-actions{justify-content:flex-end}}
+</style>
+
+<script>
+(() => {
+  // --- Настройки бизнеса
+  const revenuePerDay = 300000;               // ₽/день
+  const revenuePerMinute = revenuePerDay / (24 * 60); // ₽/мин простоя
+
+  // --- Усиление последствий для "плохих" решений
+  // downtimeMult: увеличивает простой (=> прямые потери)
+  // repMult: увеличивает репутационный урон
+  // churnRatePerStep: добавляет "скрытую стоимость" (отток/падение конверсии) как долю дневной выручки за шаг
+  const SEVERITY = {
+    good:     { downtimeMult: 1.0, repMult: 1.0, churnRatePerStep: 0.000 }, // 0%
+    ok:       { downtimeMult: 1.1, repMult: 1.15, churnRatePerStep: 0.010 }, // 1%
+    bad:      { downtimeMult: 1.35, repMult: 1.60, churnRatePerStep: 0.035 }, // 3.5%
+    terrible: { downtimeMult: 1.70, repMult: 2.10, churnRatePerStep: 0.070 }  // 7%
+  };
+
+  // --- Сценарий
+  const nodes = {
+    start: {
+      title: "10:02. Мониторинг",
+      text:
+`🔺 CPU 95%
+🔺 Запросов в 20 раз больше за 5 минут
+🔺 Жалобы: «сайт тормозит»
+
+Что делаете?`,
+      tip: "Подсказка: перезапуск лечит симптомы. Сначала — диагностика.",
+      choices: [
+        {
+          label: "Перезапущу сервер",
+          desc: "Быстро, но не всегда помогает",
+          severity: "bad",
+          effect: { minutes: 10, downtime: 2, rep: 6, lossExtra: 0 },
+          feedback: {
+            badge: "📉 Плохо",
+            text: "Сайт упал на 2 минуты, затем снова упёрся в 100% нагрузки. При DDoS перезапуск редко помогает — причина остаётся."
+          },
+          next: "stage2_unconfirmed"
+        },
+        {
+          label: "Подожду, может само пройдёт",
+          desc: "Ничего не делаю",
+          severity: "terrible",
+          effect: { minutes: 10, downtime: 10, rep: 12, lossExtra: 0 },
+          feedback: {
+            badge: "⛔ Очень плохо",
+            text: "За 10 минут пользователи продолжают получать ошибки. DDoS редко «сам проходит». Чем дольше ждёте — тем дороже."
+          },
+          next: "stage2_worse"
+        },
+        {
+          label: "Проверю источники трафика и логи",
+          desc: "Диагностика перед действиями",
+          severity: "good",
+          effect: { minutes: 10, downtime: 1, rep: 2, lossExtra: 0 },
+          feedback: {
+            badge: "✅ Верно",
+            text: "Вы видите тысячи IP и подозрительные паттерны. Похоже на ботнет и атаку уровня приложения (L7)."
+          },
+          next: "stage2_confirmed"
+        }
+      ]
+    },
+
+    stage2_unconfirmed: {
+      title: "10:12. Нагрузка вернулась",
+      text:
+`Перезапуск помог на минуты.
+Сайт опять тормозит. Похоже, это не «глюк».
+
+Что дальше?`,
+      tip: "Без диагностики легко потратить время на бесполезные шаги.",
+      choices: [
+        {
+          label: "Начну блокировать IP вручную",
+          desc: "Запрещаю подозрительные адреса",
+          severity: "bad",
+          effect: { minutes: 10, downtime: 4, rep: 8, lossExtra: 0 },
+          feedback: { badge: "📉 Плохо", text: "Вы заблокировали сотни IP — появились тысячи новых. При распределённой атаке IP быстро меняются." },
+          next: "stage3_secondwave"
+        },
+        {
+          label: "Проведу диагностику (страны, user-agent, частота)",
+          desc: "Теперь собираю признаки атаки",
+          severity: "ok",
+          effect: { minutes: 10, downtime: 2, rep: 4, lossExtra: 0 },
+          feedback: { badge: "🟡 Норм", text: "Поздновато, но вы собрали признаки: повторяющиеся GET на одну страницу, одинаковые user-agent, всплеск по ASN." },
+          next: "stage2_confirmed"
+        }
+      ]
+    },
+
+    stage2_worse: {
+      title: "10:12. Сайт практически лёг",
+      text:
+`Пользователи массово получают 502/504.
+Поддержка завалена обращениями.
+
+Что делаете СЕЙЧАС?`,
+      tip: "Когда уже «горит», важны действия, которые уменьшают трафик ДО вашего сервера.",
+      choices: [
+        {
+          label: "Подключу CDN",
+          desc: "Кэш + базовая фильтрация",
+          severity: "ok",
+          effect: { minutes: 10, downtime: 6, rep: 10, lossExtra: 0 },
+          feedback: { badge: "🟡 Частично", text: "Часть трафика отсеялась/закэшировалась, но L7-атака продолжает пробиваться." },
+          next: "stage3_secondwave"
+        },
+        {
+          label: "Включу WAF + rate limiting",
+          desc: "Режу ботов по поведению",
+          severity: "good",
+          effect: { minutes: 10, downtime: 3, rep: 6, lossExtra: 0 },
+          feedback: { badge: "✅ Хорошо", text: "Подозрительные запросы получают 429, боты теряют эффективность. Сайт стабилизируется, но возможна вторая волна." },
+          next: "stage3_secondwave"
+        },
+        {
+          label: "Масштабирую сервер (больше CPU/инстансов)",
+          desc: "Покупаю мощность",
+          severity: "bad",
+          effect: { minutes: 10, downtime: 5, rep: 9, lossExtra: 12000 },
+          feedback: { badge: "🟠 Дорого", text: "Вы выиграли немного времени, но атакующий может масштабироваться быстрее. Плюс лишние расходы на инфраструктуру." },
+          next: "stage3_secondwave"
+        }
+      ]
+    },
+
+    stage2_confirmed: {
+      title: "10:12. Подтверждённая DDoS (L7)",
+      text:
+`80% запросов идут с тысяч IP.
+Поведение похоже на ботов: частые GET к одной странице, одинаковые паттерны.
+
+Что внедряем?`,
+      tip: "Для L7 часто решает фильтрация по поведению (WAF/rate limiting), а не «бан по IP».",
+      choices: [
+        {
+          label: "Заблокирую IP вручную",
+          desc: "Чёрные списки",
+          severity: "bad",
+          effect: { minutes: 10, downtime: 3, rep: 6, lossExtra: 0 },
+          feedback: { badge: "📉 Плохо", text: "IP меняются, боты живут дальше. Это может помочь точечно, но не как основная стратегия." },
+          next: "stage3_secondwave"
+        },
+        {
+          label: "CDN + кэширование статики",
+          desc: "Разгружаю сервер",
+          severity: "ok",
+          effect: { minutes: 10, downtime: 2, rep: 3, lossExtra: 0 },
+          feedback: { badge: "🟡 Неплохо", text: "CDN снимает часть нагрузки, но «умные» L7-боты могут пробиваться к динамике." },
+          next: "stage3_secondwave"
+        },
+        {
+          label: "WAF + rate limiting + правила на URL",
+          desc: "Режу аномалии и частоту",
+          severity: "good",
+          effect: { minutes: 10, downtime: 1, rep: 1, lossExtra: 0 },
+          feedback: { badge: "✅ Отлично", text: "Фильтрация поведения резко уменьшает влияние L7. Вероятность падения заметно ниже." },
+          next: "stage3_secondwave"
+        }
+      ]
+    },
+
+    stage3_secondwave: {
+      title: "11:00. Вторая волна (SYN flood)",
+      text:
+`Атака меняется: много TCP SYN.
+Серверу тяжело принимать новые соединения.
+
+Ваш ход:`,
+      tip: "На сетевые атаки лучше всего работает защита «до входа» (Anycast/анти-DDoS провайдер).",
+      choices: [
+        {
+          label: "Увеличу мощность сервера",
+          desc: "Больше ресурсов",
+          severity: "bad",
+          effect: { minutes: 10, downtime: 4, rep: 8, lossExtra: 15000 },
+          feedback: { badge: "🟠 Временное", text: "Даёт передышку, но атакующий может усилить поток. Платите больше — а риск остаётся." },
+          next: "final_mid"
+        },
+        {
+          label: "Подключу анти-DDoS (Anycast/скраббинг)",
+          desc: "Фильтрация до сервера",
+          severity: "good",
+          effect: { minutes: 10, downtime: 1, rep: 2, lossExtra: 0 },
+          feedback: { badge: "✅ Лучшее", text: "Трафик очищается на стороне провайдера/сети, до вашего сервера доходит «нормальный» поток." },
+          next: "final_good"
+        },
+        {
+          label: "Ничего — переживём",
+          desc: "Надеюсь, само закончится",
+          severity: "terrible",
+          effect: { minutes: 10, downtime: 10, rep: 15, lossExtra: 0 },
+          feedback: { badge: "⛔ Очень плохо", text: "SYN flood быстро кладёт коннекты. Пользователи массово уходят к конкурентам." },
+          next: "final_bad"
+        }
+      ]
+    },
+
+    final_good: {
+      title: "Финал: Вы пережили атаку",
+      text:
+`Вы быстро диагностировали проблему, включили фильтрацию и вынесли защиту «на периметр».
+
+Итог: минимальные потери, сайт работал большую часть времени.`,
+      tip: "Вывод: диагностика + фильтрация + защита до инфраструктуры.",
+      isFinal: true
+    },
+    final_mid: {
+      title: "Финал: Вы выжили, но дорого",
+      text:
+`Сайт держался за счёт ресурсов и частичных мер.
+
+Итог: потери денег + лишние расходы + часть пользователей ушла.`,
+      tip: "Вывод: масштабирование помогает, но не заменяет анти-DDoS.",
+      isFinal: true
+    },
+    final_bad: {
+      title: "Финал: Сайт лёг",
+      text:
+`Без защиты и быстрых мер атака добила инфраструктуру.
+
+Итог: простой, потери выручки и удар по доверию.`,
+      tip: "Вывод: план реагирования лучше иметь ДО атаки.",
+      isFinal: true
+    }
+  };
+
+  // --- Состояние
+  const state = {
+    nodeId: "start",
+    minutes: 0,
+    downtime: 0,
+    rep: 0,
+    loss: 0,
+    _extras: 0,     // прямые доп.расходы (инфра/аварийка)
+    _churn: 0,      // "скрытые" потери от оттока/снижения конверсии
+    history: []
+  };
+
+  const root = document.getElementById("ddosSim");
+  const ui = {
+    scene: root.querySelector('[data-ui="scene"]'),
+    choices: root.querySelector('[data-ui="choices"]'),
+    feedback: root.querySelector('[data-ui="feedback"]'),
+    tip: root.querySelector('[data-ui="tip"]'),
+    btnNext: root.querySelector('[data-action="next"]'),
+    btnBack: root.querySelector('[data-action="back"]'),
+    btnReset: root.querySelector('[data-action="reset"]'),
+    statMinutes: root.querySelector('[data-stat="minutes"]'),
+    statDowntime: root.querySelector('[data-stat="downtime"]'),
+    statLoss: root.querySelector('[data-stat="loss"]'),
+    statRep: root.querySelector('[data-stat="rep"]')
+  };
+
+  function formatMoney(n){
+    return Math.max(0, Math.round(n)).toString().replace(/\B(?=(\d{3})+(?!\d))/g, " ");
+  }
+
+  function clamp(n, a, b){ return Math.max(a, Math.min(b, n)); }
+
+  function recalcLoss(){
+    const downtimeLoss = state.downtime * revenuePerMinute;
+    state.loss = downtimeLoss + (state._extras || 0) + (state._churn || 0);
+  }
+
+  function renderStats(){
+    recalcLoss();
+    ui.statMinutes.textContent = state.minutes;
+    ui.statDowntime.textContent = state.downtime;
+    ui.statLoss.textContent = formatMoney(state.loss);
+    ui.statRep.textContent = clamp(state.rep, 0, 100);
+  }
+
+  function renderNode(){
+    const node = nodes[state.nodeId];
+
+    ui.scene.innerHTML = `<div style="font-weight:800;margin-bottom:6px">${node.title}</div>
+                          <div style="white-space:pre-line">${node.text}</div>`;
+
+    ui.tip.textContent = node.tip || "";
+    ui.feedback.hidden = true;
+    ui.feedback.innerHTML = "";
+
+    ui.choices.innerHTML = "";
+    ui.btnNext.disabled = true;
+    ui.btnBack.disabled = state.history.length === 0;
+
+    if (node.isFinal){
+      const rep = clamp(state.rep, 0, 100);
+      ui.choices.innerHTML = `
+        <div class="ddos-feedback" style="background:#f6fff6;border-color:#d7f5d7">
+          <span class="ddos-badge">🏁 Итог</span>
+          <strong>Потери:</strong> ₽ ${formatMoney(state.loss)} ·
+          <strong>Простой:</strong> ${state.downtime} мин ·
+          <strong>Репутационный урон:</strong> ${rep}/100
+          <div style="margin-top:8px;color:#333">
+            <strong>Важно:</strong> «Скрытые» потери учитывают отток/падение конверсии после плохих решений во время инцидента.
+          </div>
+        </div>
+      `;
+      ui.btnNext.disabled = true;
+      return;
+    }
+
+    node.choices.forEach((c, idx) => {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "ddos-choice";
+      btn.setAttribute("aria-pressed", "false");
+      btn.innerHTML = `<strong>${c.label}</strong><small>${c.desc}</small>`;
+      btn.addEventListener("click", () => selectChoice(idx));
+      ui.choices.appendChild(btn);
+    });
+  }
+
+  let selectedIndex = null;
+  let pendingNext = null;
+
+  function computeAppliedEffect(choice){
+    const sevKey = choice.severity || "ok";
+    const s = SEVERITY[sevKey] || SEVERITY.ok;
+
+    const base = choice.effect;
+
+    // Усиление для плохих вариантов
+    const downtime = Math.round(base.downtime * s.downtimeMult);
+    const rep = Math.round(base.rep * s.repMult);
+
+    // "Скрытая стоимость" — доля дневной выручки за каждый шаг, зависит от severity
+    // Например, terrible добавляет заметный долгосрочный хвост из-за недоверия/оттока.
+    const churn = Math.round(revenuePerDay * s.churnRatePerStep);
+
+    const lossExtra = base.lossExtra || 0;
+
+    return {
+      minutes: base.minutes,
+      downtime,
+      rep,
+      lossExtra,
+      churn,
+      sevKey
+    };
+  }
+
+  function selectChoice(idx){
+    const node = nodes[state.nodeId];
+    const choice = node.choices[idx];
+    selectedIndex = idx;
+    pendingNext = choice.next;
+
+    [...ui.choices.querySelectorAll(".ddos-choice")].forEach((el, i) => {
+      el.setAttribute("aria-pressed", i === idx ? "true" : "false");
+    });
+
+    const applied = computeAppliedEffect(choice);
+
+    ui.feedback.hidden = false;
+    ui.feedback.innerHTML = `
+      <span class="ddos-badge">${choice.feedback.badge}</span>
+      <span>${choice.feedback.text}</span>
+      <div style="margin-top:8px;color:#333">
+        <strong>Эффект:</strong>
+        +${applied.minutes} мин,
+        простой +${applied.downtime} мин,
+        репутационный урон +${applied.rep}
+        ${applied.lossExtra ? `, доп.расходы ₽ ${formatMoney(applied.lossExtra)}` : ""}
+        ${applied.churn ? `, скрытые потери ₽ ${formatMoney(applied.churn)}` : ""}
+      </div>
+    `;
+
+    ui.btnNext.disabled = false;
+  }
+
+  function applyChoiceAndGoNext(){
+    const node = nodes[state.nodeId];
+    if (selectedIndex == null) return;
+    const choice = node.choices[selectedIndex];
+    const applied = computeAppliedEffect(choice);
+
+    state.history.push({
+      nodeId: state.nodeId,
+      minutes: state.minutes,
+      downtime: state.downtime,
+      rep: state.rep,
+      extras: state._extras || 0,
+      churn: state._churn || 0
+    });
+
+    state.minutes += applied.minutes;
+    state.downtime += applied.downtime;
+    state.rep += applied.rep;
+    state._extras = (state._extras || 0) + (applied.lossExtra || 0);
+    state._churn  = (state._churn  || 0) + (applied.churn || 0);
+
+    state.nodeId = pendingNext;
+    selectedIndex = null;
+    pendingNext = null;
+
+    renderStats();
+    renderNode();
+  }
+
+  function goBack(){
+    const prev = state.history.pop();
+    if (!prev) return;
+
+    state.nodeId = prev.nodeId;
+    state.minutes = prev.minutes;
+    state.downtime = prev.downtime;
+    state.rep = prev.rep;
+    state._extras = prev.extras;
+    state._churn = prev.churn;
+
+    selectedIndex = null;
+    pendingNext = null;
+
+    renderStats();
+    renderNode();
+  }
+
+  function resetAll(){
+    state.nodeId = "start";
+    state.minutes = 0;
+    state.downtime = 0;
+    state.rep = 0;
+    state.loss = 0;
+    state._extras = 0;
+    state._churn = 0;
+    state.history = [];
+
+    selectedIndex = null;
+    pendingNext = null;
+
+    renderStats();
+    renderNode();
+  }
+
+  ui.btnNext.addEventListener("click", applyChoiceAndGoNext);
+  ui.btnBack.addEventListener("click", goBack);
+  ui.btnReset.addEventListener("click", resetAll);
+
+  resetAll();
+})();
+</script>
